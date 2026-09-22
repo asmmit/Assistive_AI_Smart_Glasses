@@ -1,0 +1,12 @@
+# Virtual Environment
+venv/
+ENV/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local weights / runs
+*.pt
+runs/
