@@ -1,11 +1,11 @@
-<<<<<<< HEAD
+
 # Assistive AI Smart Glasses – Laptop Prototype
 
 **Phone camera → Laptop runs the full AI pipeline**
 
 Works on **Windows / macOS / Linux**. Audio uses `winsound` on Windows when pygame is not available (important for Python 3.14).
 
----
+
 
 ## 1. What you need
 
