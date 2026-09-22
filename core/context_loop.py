@@ -1,101 +1,109 @@
-"""
-Part 3 – Throttled Context Loop (Face / Scene)
-
-Runs on a separate schedule so it never blocks the safety-critical path.
-Triggered only every N frames OR when a stable “person” track exists.
-"""
-
-from __future__ import annotations
-import time
-import threading
-from typing import Optional, List, Dict, Any
+import os
+import urllib.request
 import cv2
-import numpy as np
-
-try:
-    import mediapipe as mp
-    MP_AVAILABLE = True
-except ImportError:
-    MP_AVAILABLE = False
-    print("[ContextLoop] mediapipe not installed – face detection disabled")
-
+import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
 
 class ContextLoop:
-    def __init__(
-        self,
-        every_n_frames: int = 8,
-        min_person_stable_frames: int = 3,
-    ):
+    def __init__(self, every_n_frames=10):
         self.every_n_frames = every_n_frames
-        self.min_person_stable_frames = min_person_stable_frames
-        self._frame_counter = 0
-        self._lock = threading.Lock()
-        self._latest_result: Optional[Dict[str, Any]] = None
-        self._person_stable_count = 0
+        self.frame_count = 0
+        self.latest_faces = []
+        
+        # Ensure assets directory exists
+        os.makedirs("assets", exist_ok=True)
+        self.model_path = os.path.join("assets", "blaze_face_short_range.tflite")
+        
+        # Automatically download the MediaPipe Face Detector model if missing
+        if not os.path.exists(self.model_path):
+            print("[ContextLoop] Downloading MediaPipe face detector model...")
+            model_url = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite"
+            try:
+                urllib.request.urlretrieve(model_url, self.model_path)
+                print("[ContextLoop] Model downloaded successfully.")
+            except Exception as e:
+                print(f"[ContextLoop] Failed to download model automatically: {e}")
 
-        if MP_AVAILABLE:
-            self.mp_face = mp.solutions.face_detection
-            self.face_detector = self.mp_face.FaceDetection(
-                model_selection=0,  # short-range
-                min_detection_confidence=0.55,
-            )
-            print("[ContextLoop] MediaPipe Face Detection ready")
-        else:
-            self.face_detector = None
+        # Initialize the modern MediaPipe Tasks Face Detector
+        try:
+            if os.path.exists(self.model_path):
+                base_options = python.BaseOptions(model_asset_path=self.model_path)
+                options = vision.FaceDetectorOptions(
+                    base_options=base_options,
+                    running_mode=vision.RunningMode.IMAGE
+                )
+                self.detector = vision.FaceDetector.create_from_options(options)
+                self.mp_available = True
+                print("[ContextLoop] Modern MediaPipe Tasks Face Detector initialized successfully.")
+            else:
+                self.mp_available = False
+                print("[ContextLoop] Face detector model path not found. Face detection disabled.")
+        except Exception as e:
+            self.mp_available = False
+            print(f"[ContextLoop] Error initializing MediaPipe Face Detector: {e}")
 
-        # Placeholder local “contacts” – replace with real embeddings later
-        self.known_contacts = {
-            # "embedding_hash": "Name"
+    def process(self, frame):
+        """
+        Processes a frame periodically to detect faces using the modern Tasks API.
+        """
+        self.frame_count += 1
+        if not self.mp_available:
+            return []
+
+        # Run detection every N frames to save compute/CPU cycles
+        if self.frame_count % self.every_n_frames == 0:
+            try:
+                # Convert OpenCV BGR image to RGB and wrap into mp.Image
+                rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_image)
+                
+                # Perform detection
+                result = self.detector.detect(mp_image)
+                self.latest_faces = result.detections if result and result.detections else []
+            except Exception as e:
+                print(f"[ContextLoop Error] {e}")
+                self.latest_faces = []
+
+        return self.latest_faces
+
+    def draw_annotations(self, frame):
+        """
+        Draws bounding boxes around detected faces on the video frame.
+        """
+        if not self.mp_available:
+            return frame
+
+        h, w, _ = frame.shape
+        for detection in self.latest_faces:
+            bbox = detection.bounding_box
+            start_point = (bbox.origin_x, bbox.origin_y)
+            end_point = (bbox.origin_x + bbox.width, bbox.origin_y + bbox.height)
+            
+            # Draw rectangle around face
+            cv2.rectangle(frame, start_point, end_point, (0, 255, 0), 2)
+            cv2.putText(frame, "Face", (bbox.origin_x, max(0, bbox.origin_y - 10)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            
+        return frame
+    def should_run(self, has_person):
+        """
+        Determines whether the context loop should run based on whether a person is detected.
+        """
+        return self.mp_available
+
+    def process_async(self, frame):
+        """
+        Wrapper to match main.py's asynchronous call expectation by delegating to process().
+        """
+        return self.process(frame)
+
+    def get_latest(self):
+        """
+        Returns a dictionary containing the latest context information to satisfy main.py.
+        """
+        message = f"{len(self.latest_faces)} face(s) detected" if self.latest_faces else ""
+        return {
+            "faces": self.latest_faces,
+            "message": message
         }
-
-    def should_run(self, has_stable_person: bool) -> bool:
-        self._frame_counter += 1
-        if has_stable_person:
-            self._person_stable_count += 1
-        else:
-            self._person_stable_count = 0
-
-        if self._frame_counter % self.every_n_frames == 0:
-            return True
-        if self._person_stable_count >= self.min_person_stable_frames:
-            return True
-        return False
-
-    def process_async(self, frame: np.ndarray):
-        """Fire-and-forget; result is stored for later polling."""
-        if self.face_detector is None:
-            return
-        t = threading.Thread(target=self._run, args=(frame.copy(),), daemon=True)
-        t.start()
-
-    def _run(self, frame: np.ndarray):
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = self.face_detector.process(rgb)
-        faces = []
-        if results.detections:
-            h, w = frame.shape[:2]
-            for det in results.detections:
-                bbox = det.location_data.relative_bounding_box
-                x1 = int(bbox.xmin * w)
-                y1 = int(bbox.ymin * h)
-                x2 = int((bbox.xmin + bbox.width) * w)
-                y2 = int((bbox.ymin + bbox.height) * h)
-                conf = det.score[0] if det.score else 0.0
-                # Placeholder: real system would crop, embed, match SQLite
-                name = "Unknown person"
-                faces.append({
-                    "bbox": (x1, y1, x2, y2),
-                    "confidence": conf,
-                    "name": name,
-                })
-
-        with self._lock:
-            self._latest_result = {
-                "timestamp": time.perf_counter(),
-                "faces": faces,
-                "message": faces[0]["name"] if faces else None,
-            }
-
-    def get_latest(self) -> Optional[Dict[str, Any]]:
-        with self._lock:
-            return self._latest_result
