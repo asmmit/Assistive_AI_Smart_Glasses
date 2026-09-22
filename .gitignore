@@ -1,12 +1,13 @@
-# Virtual Environment
+# Virtual environments
 venv/
-ENV/
 env/
+ENV/
 
 # Python cache
 __pycache__/
 *.pyc
 
-# Local weights / runs
+# Local model weights and logs
 *.pt
 runs/
+

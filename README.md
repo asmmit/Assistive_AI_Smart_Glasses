@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Assistive AI Smart Glasses – Laptop Prototype
 
 **Phone camera → Laptop runs the full AI pipeline**
@@ -153,3 +154,7 @@ assistive_ai_smart_glasses/
 
 **Team:** Asmit · Aryan · Soyam  
 Prototype ready for field testing and later port to the Android + ESP32 system.
+=======
+# Assistive_AI_Smart_Glasses
+Real-time assistive vision for smart glasses: drop-oldest camera buffer, YOLOv8 obstacle detection + TTC alerts, throttled face recognition, and priority audio arbitration.
+>>>>>>> 91103c153a592083a86fb90acba9c1876c7bc1f7
